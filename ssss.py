@@ -6,6 +6,7 @@ from ssqueezepy.toolkit import lin_band
 from ssqueezepy.visuals import imshow, plot
 import matplotlib.pyplot as plt
 import cv2
+import numpy as np
 
 # Load the signal data from an HDF5 file
 import os
@@ -43,7 +44,7 @@ fft = np.abs(np.fft.rfft(xrec[:2300]))
 #ax[1].set_xlim(0,1e6)
 
 # _____________________________ NEW CODE ___________________________
-threshold_percent = 0.1
+threshold_percent = 0.07
 threshold_value = threshold_percent * np.max(np.abs(Tx))
 print("np.max(np.abs(Tx)", np.max(np.abs(Tx)))
 print("Thresh val:", threshold_value)
@@ -60,7 +61,8 @@ print(f"Y lims: {min_y} : {max_y}")
 mask_uint8 = mask.astype(np.uint8)
 num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask_uint8, connectivity=8)
 areas = stats[1:, cv2.CC_STAT_AREA]
-sorted_indices = np.argsort(-areas)[:5]
+# sorted_indices = np.argsort(-areas)[:5]
+sorted_indices = sorted(np.argsort(-areas)[:5], key=lambda idx: stats[idx + 1, cv2.CC_STAT_LEFT])
 
 plt.figure(figsize=(6, 6))
 plt.imshow(mask, aspect='auto', origin='lower', cmap='gray')
@@ -78,6 +80,37 @@ plt.tight_layout()
 plt.gca().invert_yaxis()
 plt.show()
 
+bbox_info = []
+for idx in sorted_indices:
+    x, y, w, h = stats[idx + 1, cv2.CC_STAT_LEFT:cv2.CC_STAT_HEIGHT + 1]
+    bbox_info.append({'idx': idx, 'x': x, 'y': y, 'w': w, 'h': h, 'min_y': y, 'max_y': y + h})
+merged = []
+reference = bbox_info[0]
+merged.append(reference)
+for b in bbox_info[1:]:
+    if not (b['max_y'] < reference['min_y'] or b['min_y'] > reference['max_y']):
+        merged.append(b)
+min_x = min(b['x'] for b in merged)
+max_x = max(b['x'] + b['w'] for b in merged)
+min_y = min(b['y'] for b in merged)
+max_y = max(b['y'] + b['h'] for b in merged)
+w = max_x - min_x
+h = max_y - min_y
+
+plt.figure(figsize=(6, 6))
+plt.imshow(mask, aspect='auto', origin='lower', cmap='gray')
+plt.gca().add_patch(plt.Rectangle((min_x, min_y), w, h, edgecolor='red', facecolor='none', linewidth=2))
+plt.text(min_x, min_y - 5, 'merged', color='yellow', fontsize=12, weight='bold')
+plt.title(f'Merged bbox')
+plt.tight_layout()
+plt.gca().invert_yaxis()
+plt.show()
+bbox_mask = np.zeros_like(Tx, dtype=bool)
+bbox_mask[min_y:max_y, min_x:max_x] = True
+refined_mask = np.logical_and(bbox_mask, mask)
+Tx_merged = np.where(refined_mask, Tx, 0 + 0j)
+
+# unite bbox from last code
 num_bbox_to_use = 2
 if num_bbox_to_use < 2:
     i = 0
@@ -99,7 +132,12 @@ else:
 
 
 
-xrec = issq_cwt(Tx_i, wavelet=('morlet', {'mu': 4.5}))
+xrec = issq_cwt(Tx_merged, wavelet=('morlet', {'mu': 4.5}))
 plt.plot(xrec)
+plt.show()
+
+freqs = np.fft.rfftfreq(len(xrec)*1000, dt)
+fft = np.abs(np.fft.rfft(xrec, n=len(freqs)*2-1))
+plt.plot(freqs, fft)
 plt.show()
 
